@@ -71,14 +71,18 @@ def track_ticket_status_change(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Ticket)
 def send_ticket_notifications(sender, instance, created, **kwargs):
-    """Send email and WhatsApp notifications after ticket changes (history is created by views with correct user)"""
+    """
+    Send email and WhatsApp notifications after ticket STATUS changes
+    
+    NOTE: Assignment notifications are handled explicitly in views.py
+    This signal only handles automatic status change notifications
+    History entries are created by views with correct user context
+    """
     if not created and instance.pk:
-        # Get old status and assignment from pre_save signal
+        # Get old status from pre_save signal
         old_status = getattr(instance, '_old_status', None)
-        old_assigned_to = getattr(instance, '_old_assigned_to', None)
         
-        # ONLY send notifications - views create history with correct user
-        # Handle status changes
+        # ONLY handle STATUS changes - assignment is handled in views
         if old_status and old_status != instance.status:
             from .email_service import (
                 notify_client_ticket_opened, notify_client_work_started,
@@ -110,17 +114,6 @@ def send_ticket_notifications(sender, instance, created, **kwargs):
             elif instance.status == 'CLOSED':
                 # Send WhatsApp for closed ticket
                 notify_ticket_closed_whatsapp(instance)
-        
-        # Handle assignment changes
-        if old_assigned_to != instance.assigned_to and instance.assigned_to:
-            from .email_service import notify_developer_assignment
-            from .whatsapp_service import notify_developer_assignment_whatsapp
-            # Send email
-            notify_developer_assignment(instance, [instance.assigned_to])
-            print(f"📧 Developer assignment email sent for ticket #{instance.id}")
-            # Send WhatsApp
-            notify_developer_assignment_whatsapp(instance, [instance.assigned_to])
-            print(f"📱 Developer assignment WhatsApp sent for ticket #{instance.id}")
         
         # Clean up temporary attributes
         if hasattr(instance, '_old_status'):

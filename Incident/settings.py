@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'daphne',
     'django.contrib.staticfiles',
     
     # Third-party apps
@@ -44,7 +45,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
-    'daphne',
     'channels',
     
     # Local apps
@@ -200,7 +200,7 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'me.mohamed.eid0@gmail.com'
-EMAIL_HOST_PASSWORD = 'fioe okhq jcjv gqns'  # Add Gmail App Password here (not your regular password)
+EMAIL_HOST_PASSWORD = 'fioe okhq jcjv gqxy'  # Add Gmail App Password here (not your regular password)
 DEFAULT_FROM_EMAIL = 'me.mohamed.eid0@gmail.com'
 
 # Frontend URL for email links (update for production)
@@ -210,6 +210,13 @@ FRONTEND_URL = 'http://localhost:8000'
 # Allow all origins and methods (development/testing)
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+# *********************************************************
+# For production, specify allowed origins like below:
+# CORS_ALLOW_ALL_ORIGINS = False
+# CORS_ALLOWED_ORIGINS = [
+#     'http://localhost:3000',
+#     'https://yourdomain.com'
+# ]
 
 # Allow all HTTP methods
 CORS_ALLOW_METHODS = [

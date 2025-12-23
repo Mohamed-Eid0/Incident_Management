@@ -1,8 +1,9 @@
-from rest_framework import viewsets, permissions, status, generics
+from rest_framework import viewsets, permissions, status, generics, mixins
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth.models import User
+from django.utils import timezone
 from .models import Ticket, TicketHistory, UserProfile, NotificationLog
 from .serializers import (
     TicketSerializer, TicketAdminSerializer,
@@ -11,6 +12,10 @@ from .serializers import (
 )
 from .auth_serializers import LoginSerializer, UserDetailSerializer
 from .user_serializers import UserCreateSerializer, UserUpdateSerializer, UserListSerializer, UpdateOwnProfileSerializer
+from .action_serializers import (
+    TicketAssignmentSerializer, TicketFinishWorkSerializer,
+    TicketRejectSerializer, TicketCommentSerializer
+)
 from .email_service import (
     notify_admin_new_ticket, notify_client_ticket_opened,
     notify_developer_assignment, notify_client_work_started,
@@ -167,62 +172,71 @@ class TicketViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def assign(self, request, pk=None):
-        """Admin action to assign ticket to support user(s)"""
+        """Admin action to assign ticket to support user(s) with validation"""
         ticket = self.get_object()
-        assigned_to_ids = request.data.get('assigned_to')
-        resolution_due_at = request.data.get('resolution_due_at')
-        estimated_resolution_time = request.data.get('estimated_resolution_time')
         
-        if not assigned_to_ids:
-            return Response({'error': 'assigned_to is required (array of user IDs)'}, status=status.HTTP_400_BAD_REQUEST)
+        # Use serializer for input validation
+        serializer = TicketAssignmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)  # Auto returns 400 with errors
         
-        # Ensure it's a list
-        if not isinstance(assigned_to_ids, list):
-            assigned_to_ids = [assigned_to_ids]
+        validated_data = serializer.validated_data
+        assigned_to_ids = validated_data['assigned_to']
         
-        try:
-            # Get all support users with provided IDs
-            support_users = User.objects.filter(id__in=assigned_to_ids, profile__role='SUPPORT')
-            
-            if not support_users.exists():
-                return Response({'error': 'No valid support users found'}, status=status.HTTP_404_NOT_FOUND)
-            
-            if support_users.count() != len(assigned_to_ids):
-                return Response({'error': 'Some user IDs are invalid or not support users'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Update SLA fields if provided
-            if resolution_due_at:
-                from django.utils.dateparse import parse_datetime
-                ticket.resolution_due_at = parse_datetime(resolution_due_at)
-            if estimated_resolution_time:
-                from django.utils.dateparse import parse_datetime
-                ticket.estimated_resolution_time = parse_datetime(estimated_resolution_time)
-            
-            ticket.save()
-            
-            # Set assigned developers (ManyToMany)
-            ticket.assigned_to.set(support_users)
-            
-            # Create history entry
-            dev_names = ', '.join([u.get_full_name() or u.username for u in support_users])
-            TicketHistory.objects.create(
-                ticket=ticket,
-                changed_by=request.user,
-                status_from=ticket.status,
-                status_to=ticket.status,
-                comment=f'Ticket assigned to {dev_names}'
+        # Get OLD assignment for comparison (to detect changes)
+        old_assigned_ids = set(ticket.assigned_to.values_list('id', flat=True))
+        
+        # Get all support users with provided IDs
+        support_users = User.objects.filter(id__in=assigned_to_ids, profile__role='SUPPORT')
+        
+        if support_users.count() != len(assigned_to_ids):
+            return Response(
+                {'error': 'Some user IDs are invalid or not support users'},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            
-            # Send email to developer(s)
-            notify_developer_assignment(ticket, list(support_users))
-            
-            # Send WebSocket notification to developer(s)
-            from .notification_service import notify_developers_assignment_ws
-            notify_developers_assignment_ws(ticket, list(support_users))
-            
-            return Response(self.get_serializer(ticket).data)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update SLA fields (now validated by serializer)
+        if 'resolution_due_at' in validated_data:
+            ticket.resolution_due_at = validated_data['resolution_due_at']
+        if 'estimated_resolution_time' in validated_data:
+            ticket.estimated_resolution_time = validated_data['estimated_resolution_time']
+        
+        ticket.save()
+        
+        # Set assigned developers (ManyToMany)
+        ticket.assigned_to.set(support_users)
+        
+        # Get NEW assignment for comparison
+        new_assigned_ids = set(ticket.assigned_to.values_list('id', flat=True))
+        
+        # Create history entry
+        dev_names = ', '.join([u.get_full_name() or u.username for u in support_users])
+        TicketHistory.objects.create(
+            ticket=ticket,
+            changed_by=request.user,
+            status_from=ticket.status,
+            status_to=ticket.status,
+            comment=f'Ticket assigned to {dev_names}'
+        )
+        
+        # Only notify if assignment actually changed
+        if old_assigned_ids != new_assigned_ids:
+            # Get newly assigned developers (difference)
+            newly_assigned_ids = new_assigned_ids - old_assigned_ids
+            if newly_assigned_ids:
+                newly_assigned = User.objects.filter(id__in=newly_assigned_ids)
+                
+                # Send Email notifications
+                notify_developer_assignment(ticket, list(newly_assigned))
+                
+                # Send WhatsApp notifications
+                from .whatsapp_service import notify_developer_assignment_whatsapp
+                notify_developer_assignment_whatsapp(ticket, list(newly_assigned))
+                
+                # Send WebSocket notifications
+                from .notification_service import notify_developers_assignment_ws
+                notify_developers_assignment_ws(ticket, list(newly_assigned))
+        
+        return Response(self.get_serializer(ticket).data)
     
     @action(detail=True, methods=['post'])
     def start_work(self, request, pk=None):
@@ -262,7 +276,7 @@ class TicketViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def finish_work(self, request, pk=None):
-        """Developer action to mark work as finished"""
+        """Developer action to mark work as finished with validation"""
         ticket = self.get_object()
         
         # Check if user is assigned to this ticket or is admin
@@ -274,11 +288,16 @@ class TicketViewSet(viewsets.ModelViewSet):
         if ticket.status != 'IN_PROGRESS':
             return Response({'error': 'Ticket is not in progress'}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Validate input
+        serializer = TicketFinishWorkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        comment = serializer.validated_data['comment']
+        
         ticket.status = 'RESOLVED'
         ticket.save()
         
         # Create history entry
-        comment = request.data.get('comment', 'Work completed')
         TicketHistory.objects.create(
             ticket=ticket,
             changed_by=request.user,
@@ -332,7 +351,7 @@ class TicketViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
-        """Client action to reject work and request more changes"""
+        """Client action to reject work and request more changes with validation"""
         ticket = self.get_object()
         
         # Only ticket creator can reject
@@ -342,11 +361,16 @@ class TicketViewSet(viewsets.ModelViewSet):
         if ticket.status not in ['RESOLVED', 'WAITING_APPROVAL']:
             return Response({'error': 'Ticket is not awaiting approval'}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Validate input - rejection reason is required
+        serializer = TicketRejectSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        rejection_reason = serializer.validated_data['comment']
+        
         ticket.status = 'IN_PROGRESS'
         ticket.save()
         
         # Create history entry
-        rejection_reason = request.data.get('comment', 'Client rejected the resolution')
         TicketHistory.objects.create(
             ticket=ticket,
             changed_by=request.user,
@@ -374,9 +398,14 @@ class TicketViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def add_comment(self, request, pk=None):
-        """Add a comment/history entry to the ticket"""
+        """Add a comment/history entry to the ticket with validation"""
         ticket = self.get_object()
-        comment = request.data.get('comment', '')
+        
+        # Validate input
+        serializer = TicketCommentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        comment = serializer.validated_data['comment']
         
         TicketHistory.objects.create(
             ticket=ticket,
@@ -476,13 +505,166 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class NotificationLogViewSet(viewsets.ReadOnlyModelViewSet):
-    """ViewSet for viewing notification logs"""
+class NotificationLogViewSet(viewsets.GenericViewSet, 
+                             mixins.ListModelMixin):
+    """
+    ViewSet for viewing and managing notification logs
+    
+    Provides endpoints for:
+    - List all notifications (with filtering) - returns minimal data only
+    - Get unread count
+    - Mark individual notification as read
+    - Mark all notifications as read
+    
+    Note: No detailed view endpoint - all endpoints return minimal data for security/performance
+    """
     serializer_class = NotificationLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
-        """Users see their own notifications, admins see all"""
+        """
+        Users see their own notifications, admins see all
+        Supports filtering by:
+        - is_read: true/false
+        - notification_type: EMAIL, WHATSAPP, SYSTEM
+        - ticket: ticket ID
+        """
+        base_queryset = NotificationLog.objects.select_related('recipient', 'ticket')
+        
+        # Role-based filtering
         if hasattr(self.request.user, 'profile') and self.request.user.profile.role == 'ADMIN':
-            return NotificationLog.objects.all().select_related('recipient', 'ticket')
-        return NotificationLog.objects.filter(recipient=self.request.user).select_related('recipient', 'ticket')
+            queryset = base_queryset.all()
+        else:
+            queryset = base_queryset.filter(recipient=self.request.user)
+        
+        # Filter by read status
+        is_read = self.request.query_params.get('is_read', None)
+        if is_read is not None:
+            is_read_bool = is_read.lower() in ['true', '1', 'yes']
+            queryset = queryset.filter(is_read=is_read_bool)
+        
+        # Filter by notification type
+        notification_type = self.request.query_params.get('notification_type', None)
+        if notification_type:
+            queryset = queryset.filter(notification_type=notification_type.upper())
+        
+        # Filter by ticket
+        ticket_id = self.request.query_params.get('ticket', None)
+        if ticket_id:
+            queryset = queryset.filter(ticket_id=ticket_id)
+        
+        return queryset
+    
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        """
+        Get count of unread notifications for current user
+        
+        Response:
+        {
+            "count": 5,
+            "by_type": {
+                "EMAIL": 2,
+                "WHATSAPP": 1,
+                "SYSTEM": 2
+            }
+        }
+        """
+        unread_notifications = NotificationLog.objects.filter(
+            recipient=request.user,
+            is_read=False
+        )
+        
+        total_count = unread_notifications.count()
+        
+        # Count by type
+        from django.db.models import Count
+        by_type = dict(
+            unread_notifications.values('notification_type')
+            .annotate(count=Count('id'))
+            .values_list('notification_type', 'count')
+        )
+        
+        return Response({
+            'count': total_count,
+            'by_type': by_type
+        })
+    
+    @action(detail=True, methods=['post'])
+    def mark_as_read(self, request, pk=None):
+        """
+        Mark a single notification as read
+        
+        Returns the updated notification
+        """
+        notification = self.get_object()
+        
+        # Ensure user owns this notification (non-admins)
+        if notification.recipient != request.user:
+            if not (hasattr(request.user, 'profile') and request.user.profile.role == 'ADMIN'):
+                return Response(
+                    {'error': 'You can only mark your own notifications as read'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        notification.mark_as_read()
+        
+        serializer = self.get_serializer(notification)
+        return Response({
+            'message': 'Notification marked as read',
+            'notification': serializer.data
+        })
+    
+    @action(detail=False, methods=['post'])
+    def mark_all_as_read(self, request):
+        """
+        Mark all notifications as read for current user
+        
+        Optional query parameters:
+        - notification_type: Only mark specific type as read (EMAIL, WHATSAPP, SYSTEM)
+        - ticket: Only mark notifications for specific ticket as read
+        
+        Returns count of notifications marked as read
+        """
+        queryset = NotificationLog.objects.filter(
+            recipient=request.user,
+            is_read=False
+        )
+        
+        # Optional filtering
+        notification_type = request.query_params.get('notification_type', None)
+        if notification_type:
+            queryset = queryset.filter(notification_type=notification_type.upper())
+        
+        ticket_id = request.query_params.get('ticket', None)
+        if ticket_id:
+            queryset = queryset.filter(ticket_id=ticket_id)
+        
+        # Update all matching notifications
+        now = timezone.now()
+        count = queryset.update(is_read=True, read_at=now)
+        
+        return Response({
+            'message': f'{count} notification(s) marked as read',
+            'count': count
+        })
+    
+    @action(detail=False, methods=['get'])
+    def unread(self, request):
+        """
+        Get all unread notifications for current user
+        
+        This is equivalent to ?is_read=false but with a cleaner endpoint
+        Returns paginated list of unread notifications
+        """
+        queryset = self.get_queryset().filter(is_read=False)
+        
+        # Apply pagination
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+

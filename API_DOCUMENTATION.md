@@ -847,14 +847,310 @@ NEW → OPENED → IN_PROGRESS → RESOLVED → WAITING_APPROVAL → CLOSED
 The system sends notifications via:
 1. **Email** - Using SMTP (Gmail)
 2. **WhatsApp** - Using WhatsApp Cloud API (Meta Business)
+3. **WebSocket** - Real-time in-app notifications
 
 **Notification Triggers:**
-- New ticket created → Admin receives email + WhatsApp
-- Ticket opened → Client receives email + WhatsApp
-- Ticket assigned → Developer(s) receive email + WhatsApp
-- Work started → Client receives email + WhatsApp
-- Work finished → Client and Admin receive email + WhatsApp
-- Ticket approved/rejected → Developer and Admin receive email + WhatsApp
+- New ticket created → Admin receives email + WhatsApp + WebSocket
+- Ticket opened → Client receives email + WhatsApp + WebSocket
+- Ticket assigned → Developer(s) receive email + WhatsApp + WebSocket
+- Work started → Client receives email + WhatsApp + WebSocket
+- Work finished → Client and Admin receive email + WhatsApp + WebSocket
+- Ticket approved/rejected → Developer and Admin receive WhatsApp + WebSocket
+
+**Notification Storage:**
+- All notifications are stored in the database (`NotificationLog` table)
+- Notifications persist indefinitely and can be retrieved via API
+- Read/unread tracking with timestamps
+
+---
+
+## Notification APIs
+
+### 1. Get All Notifications
+**Endpoint:** `GET /api/notifications/`  
+**Permission:** Authenticated user (sees own), Admin (sees all)  
+**Description:** Get paginated list of notifications with filtering
+
+**Returns minimal data for performance and security** - only ID, subject, type, and read status.
+For full notification details (including message), use the detail endpoint.
+
+**Query Parameters:**
+- `is_read` - Filter by read status (`true` or `false`)
+- `notification_type` - Filter by type (`EMAIL`, `WHATSAPP`, `SYSTEM`)
+- `ticket` - Filter by ticket ID
+- `page` - Page number (default: 1)
+- `page_size` - Results per page (default: 20)
+
+**Example Request:**
+```
+GET /api/notifications/?is_read=false&notification_type=SYSTEM&page=1
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "count": 45,
+  "next": "http://localhost:8000/api/notifications/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": 123,
+      "ticket": 5,
+      "notification_type": "SYSTEM",
+      "notification_type_display": "System Alert",
+      "subject": "New Ticket Created",
+      "created_at": "2025-12-24T10:30:00Z",
+      "is_read": false,
+      "read_at": null
+    },
+    {
+      "id": 124,
+      "ticket": 7,
+      "notification_type": "EMAIL",
+      "notification_type_display": "Email",
+      "subject": "Ticket Assigned",
+      "created_at": "2025-12-24T11:15:00Z",
+      "is_read": true,
+      "read_at": "2025-12-24T11:20:00Z"
+    }
+  ]
+}
+```
+
+**Note:** List endpoint returns minimal data (no message, recipient name, ticket title etc.) for better performance and security.
+
+---
+
+### 2. Get Unread Notifications
+**Endpoint:** `GET /api/notifications/unread/`  
+**Permission:** Authenticated user  
+**Description:** Get all unread notifications for current user (paginated)
+
+**Returns minimal data** - same format as list endpoint.
+
+**Example Request:**
+```
+GET /api/notifications/unread/
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "count": 5,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 123,
+      "ticket": 5,
+      "notification_type": "SYSTEM",
+      "notification_type_display": "System Alert",
+      "subject": "New Ticket Created",
+      "created_at": "2025-12-24T10:30:00Z",
+      "is_read": false,
+      "read_at": null
+    }
+  ]
+}
+```
+
+---
+
+### 3. Get Unread Count
+**Endpoint:** `GET /api/notifications/unread_count/`  
+**Permission:** Authenticated user  
+**Description:** Get count of unread notifications with breakdown by type
+
+**Example Request:**
+```
+GET /api/notifications/unread_count/
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "count": 5,
+  "by_type": {
+    "EMAIL": 2,
+    "WHATSAPP": 1,
+    "SYSTEM": 2
+  }
+}
+```
+
+---
+
+### 4. Mark Notification as Read
+**Endpoint:** `POST /api/notifications/{id}/mark_as_read/`  
+**Permission:** Authenticated user (own notifications), Admin (all)  
+**Description:** Mark a single notification as read
+
+**Example Request:**
+```
+POST /api/notifications/123/mark_as_read/
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "Notification marked as read",
+  "notification": {
+    "id": 123,
+    "ticket": 5,
+    "notification_type": "SYSTEM",
+    "notification_type_display": "System Alert",
+    "subject": "New Ticket Created",
+    "created_at": "2025-12-24T10:30:00Z",
+    "is_read": true,
+    "read_at": "2025-12-24T14:25:30Z"
+  }
+}
+```
+
+---
+
+### 5. Mark All Notifications as Read
+**Endpoint:** `POST /api/notifications/mark_all_as_read/`  
+**Permission:** Authenticated user  
+**Description:** Mark all unread notifications as read for current user
+
+**Query Parameters (Optional):**
+- `notification_type` - Only mark specific type as read (`EMAIL`, `WHATSAPP`, `SYSTEM`)
+- `ticket` - Only mark notifications for specific ticket as read
+
+**Example Request 1 - Mark all as read:**
+```
+POST /api/notifications/mark_all_as_read/
+Authorization: Bearer <access_token>
+```
+
+**Example Request 2 - Mark only SYSTEM notifications as read:**
+```
+POST /api/notifications/mark_all_as_read/?notification_type=SYSTEM
+Authorization: Bearer <access_token>
+```
+
+**Example Request 3 - Mark only ticket #5 notifications as read:**
+```
+POST /api/notifications/mark_all_as_read/?ticket=5
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "5 notification(s) marked as read",
+  "count": 5
+}
+```
+
+---
+
+## WebSocket Notifications
+
+### Connection
+**WebSocket URL:** `ws://localhost:8000/ws/notifications/?token=<jwt_access_token>`
+
+**Protocol:** WebSocket (RFC 6455)
+
+### Message Types
+
+#### 1. Connection Established
+Sent immediately after successful connection:
+```json
+{
+  "type": "connection_established",
+  "message": "Connected successfully as john_admin",
+  "user_id": 1
+}
+```
+
+#### 2. Real-Time Notification
+Sent when a notification event occurs:
+```json
+{
+  "notification_type": "ticket_created",
+  "message": "New High priority ticket created: Homepage not loading",
+  "ticket": {
+    "id": 5,
+    "title": "Homepage not loading",
+    "priority": "HIGH",
+    "priority_display": "High",
+    "category": "BUG",
+    "status": "NEW",
+    "created_by": "John Client",
+    "project_name": "Main Website",
+    "created_at": "2025-12-24T10:30:00Z"
+  },
+  "timestamp": "2025-12-24T10:30:00Z"
+}
+```
+
+#### 3. Ping/Pong (Heartbeat)
+Client sends ping to keep connection alive:
+```json
+{
+  "type": "ping",
+  "timestamp": 1735038600000
+}
+```
+
+Server responds with pong:
+```json
+{
+  "type": "pong",
+  "timestamp": 1735038600000
+}
+```
+
+### WebSocket Notification Types
+
+| Notification Type | Trigger | Recipients |
+|------------------|---------|------------|
+| `ticket_created` | New ticket created | All Admins |
+| `ticket_opened` | Admin opens ticket | Ticket Creator (Client) |
+| `ticket_assigned` | Ticket assigned to developers | Assigned Developers |
+| `work_started` | Developer starts work | Ticket Creator (Client) |
+| `work_finished` | Developer finishes work | Ticket Creator (Client) |
+| `ticket_approved` | Client approves work | Admins + Assigned Developers |
+| `ticket_rejected` | Client rejects work | Admins + Assigned Developers |
+
+### JavaScript Example
+```javascript
+// Connect to WebSocket
+const ws = new WebSocket('ws://localhost:8000/ws/notifications/?token=' + accessToken);
+
+// Handle connection
+ws.onopen = () => {
+  console.log('Connected to notification service');
+};
+
+// Receive notifications
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.type === 'connection_established') {
+    console.log('Connected as user:', data.user_id);
+  } else if (data.notification_type) {
+    // Show notification to user
+    showNotification(data.message, data.ticket);
+  }
+};
+
+// Send heartbeat every 30 seconds
+setInterval(() => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'ping',
+      timestamp: Date.now()
+    }));
+  }
+}, 30000);
+```
 
 ---
 
@@ -886,9 +1182,14 @@ The system sends notifications via:
 | GET | `/api/users/by_role/?role=SUPPORT` | Admin | List users by role |
 | GET | `/api/profiles/` | All | View own profile |
 | PATCH | `/api/profile/update/` | All | Update own profile |
-| GET | `/api/notifications/` | All | View notification logs |
+| GET | `/api/notifications/` | All | List all notifications (filtered) |
+| GET | `/api/notifications/unread/` | All | Get unread notifications |
+| GET | `/api/notifications/unread_count/` | All | Get unread count |
+| POST | `/api/notifications/{id}/mark_as_read/` | All | Mark notification as read |
+| POST | `/api/notifications/mark_all_as_read/` | All | Mark all as read |
+| WS | `ws://host/ws/notifications/?token=<jwt>` | All | WebSocket real-time notifications |
 
 ---
 
-**Total Endpoints:** 27  
-**Last Updated:** December 23, 2025
+**Total Endpoints:** 32 (27 REST + 5 Notification APIs)  
+**Last Updated:** December 24, 2025

@@ -143,19 +143,16 @@ class TicketAdminSerializer(TicketSerializer):
 
 
 class NotificationLogSerializer(serializers.ModelSerializer):
-    """Serializer for NotificationLog model"""
-    recipient_name = serializers.CharField(source='recipient.get_full_name', read_only=True)
-    ticket_title = serializers.CharField(source='ticket.title', read_only=True, allow_null=True)
+    """Minimal serializer for NotificationLog model - returns only essential data for security and performance"""
     notification_type_display = serializers.CharField(source='get_notification_type_display', read_only=True)
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
     
     class Meta:
         model = NotificationLog
         fields = [
-            'id', 'ticket', 'ticket_title', 'recipient', 'recipient_name',
+            'id', 'ticket',  # Just IDs, no detailed data
             'notification_type', 'notification_type_display',
-            'subject', 'message',
-            'status', 'status_display', 'error_message',
-            'sent_at', 'created_at'
+            'subject',  # Just the subject like "New Ticket Created"
+            'created_at',
+            'is_read', 'read_at'
         ]
-        read_only_fields = ['id', 'sent_at', 'created_at']
+        read_only_fields = ['id', 'created_at', 'is_read', 'read_at']

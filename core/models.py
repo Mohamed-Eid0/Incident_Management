@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 
 class UserProfile(models.Model):
@@ -196,10 +197,25 @@ class NotificationLog(models.Model):
     sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
+    # Read status tracking (for SYSTEM notifications primarily)
+    is_read = models.BooleanField(default=False, help_text="Whether notification has been read by recipient")
+    read_at = models.DateTimeField(null=True, blank=True, help_text="When notification was marked as read")
+    
     def __str__(self):
         return f"{self.notification_type} to {self.recipient.username} - {self.status}"
+    
+    def mark_as_read(self):
+        """Mark notification as read with timestamp"""
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save(update_fields=['is_read', 'read_at'])
     
     class Meta:
         verbose_name = "Notification Log"
         verbose_name_plural = "Notification Logs"
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['recipient', 'is_read', '-created_at']),
+            models.Index(fields=['recipient', 'notification_type', '-created_at']),
+        ]
