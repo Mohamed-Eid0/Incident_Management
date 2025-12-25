@@ -63,7 +63,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-m42r!p9a^ab0bli8i*mxzh4%j3gj52%dt==hs*p#-uwpqe=u75'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = []
 
@@ -239,7 +239,7 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'me.mohamed.eid0@gmail.com'
-EMAIL_HOST_PASSWORD = 'rcdm ggfa hfcz ownk'  # Add Gmail App Password here (not your regular password)
+EMAIL_HOST_PASSWORD = 'fioe okhq jcjv gqnx'  # Add Gmail App Password here (not your regular password)
 DEFAULT_FROM_EMAIL = 'me.mohamed.eid0@gmail.com'
 
 # Frontend URL for email links (update for production)
