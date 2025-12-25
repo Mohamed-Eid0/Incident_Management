@@ -883,7 +883,7 @@ For full notification details (including message), use the detail endpoint.
 
 **Example Request:**
 ```
-GET /api/notifications/?is_read=false&notification_type=SYSTEM&page=1
+GET /api/notifications/?is_read=false&notification_type=SYSTEM&pagee=1
 Authorization: Bearer <access_token>
 ```
 
@@ -1171,6 +1171,8 @@ setInterval(() => {
 | POST | `/api/tickets/{id}/approve/` | Client | Approve resolution |
 | POST | `/api/tickets/{id}/reject/` | Client | Reject resolution |
 | POST | `/api/tickets/{id}/add_attachment/` | All | Add file attachment |
+| GET | `/api/tickets/{id}/get_attachments/` | All | Get ticket attachments (base64) |
+| DELETE | `/api/tickets/{id}/delete_attachment/{attachment_id}/` | All | Delete attachment (with restrictions) |
 | POST | `/api/tickets/{id}/add_comment/` | All | Add comment |
 | GET | `/api/users/` | Admin | List all users |
 | POST | `/api/users/` | Admin | Create new user |
@@ -1191,5 +1193,199 @@ setInterval(() => {
 
 ---
 
-**Total Endpoints:** 32 (27 REST + 5 Notification APIs)  
-**Last Updated:** December 24, 2025
+**Total Endpoints:** 34 (29 REST + 5 Notification APIs)  
+**Last Updated:** December 25, 2025
+
+---
+
+## New Endpoints
+
+### 1. Get Ticket Attachments
+**Endpoint:** `GET /api/tickets/{id}/get_attachments/`  
+**Permission:** All users with access to the ticket  
+**Description:** Get all attachments for a ticket in base64 format
+
+**Access Control:**
+- Admins: Can access attachments for all tickets
+- Developers: Can access attachments for tickets assigned to them
+- Clients: Can access attachments for their own tickets
+
+**Response (200 OK):**
+```json
+{
+  "ticket_id": 16,
+  "ticket_title": "Contact form not sending emails",
+  "attachments_count": 2,
+  "attachments": [
+    {
+      "id": 1,
+      "ticket": 16,
+      "file_data": "iVBORw0KGgoAAAANSUhEUgAA...",
+      "uploaded_by": 6,
+      "uploaded_by_name": "Mohamed hassan",
+      "uploaded_at": "2025-12-25 10:30:00"
+    },
+    {
+      "id": 2,
+      "ticket": 16,
+      "file_data": "JVBERi0xLjQKJeLjz9MKMyAw...",
+      "uploaded_by": 2,
+      "uploaded_by_name": "admin_user2",
+      "uploaded_at": "2025-12-25 11:15:00"
+    }
+  ]
+}
+```
+
+**Note:** `file_data` is base64 encoded. Decode it on frontend to display/download files.
+
+---
+
+### 2. Delete Attachment
+**Endpoint:** `DELETE /api/tickets/{id}/delete_attachment/{attachment_id}/`  
+**Permission:** Role-based with restrictions  
+**Description:** Delete a ticket attachment
+
+**Deletion Rules:**
+- **Client**: Can ONLY delete their own attachments
+- **Developer**: Can ONLY delete their own attachments
+- **Admin**: Can delete attachments uploaded by admins or developers (NOT by clients)
+
+**Example Request:**
+```
+DELETE /api/tickets/16/delete_attachment/5/
+Authorization: Bearer <access_token>
+```
+
+**Response (200 OK):**
+```json
+{
+  "message": "Attachment deleted successfully",
+  "attachment_id": 5
+}
+```
+
+**Response (403 Forbidden - Admin trying to delete client attachment):**
+```json
+{
+  "error": "Admins cannot delete attachments uploaded by clients"
+}
+```
+
+**Response (403 Forbidden - User trying to delete others' attachment):**
+```json
+{
+  "error": "You can only delete attachments you uploaded"
+}
+```
+
+---
+
+## Updated Response Formats
+
+### Create Ticket (Optimized Response)
+**Endpoint:** `POST /api/tickets/`
+
+**New Response (201 Created):**
+```json
+{
+  "id": 17,
+  "project_name": "new Ticking managemt5135",
+  "priority_display": "Medium",
+  "category_display": "Bug",
+  "status_display": "New",
+  "created_by": 6,
+  "created_by_name": "Mohamed hassan",
+  "response_due_at": "2025-12-25 16:33:23",
+  "response_sla_minutes": 120
+}
+```
+
+---
+
+### List Tickets (Minimal Response)
+**Endpoint:** `GET /api/tickets/`
+
+**New Response:** No attachments or history (only essential fields for performance)
+
+---
+
+### Ticket Action Responses (All Optimized)
+
+**Open Ticket:**
+```json
+{
+  "message": "Ticket opened successfully",
+  "id": 16,
+  "title": "Contact form not sending emails",
+  "status_display": "Opened"
+}
+```
+
+**Assign Developers:**
+```json
+{
+  "message": "Developers assigned successfully",
+  "id": 16,
+  "title": "Contact form not sending emails",
+  "assigned_to_names": "developer1, developer2"
+}
+```
+
+**Start Work:**
+```json
+{
+  "message": "Status updated successfully",
+  "id": 16,
+  "project_name": "Ticking managemt5135",
+  "status_display": "In Progress",
+  "estimated_resolution_time": "2025-12-26T10:00:00Z"
+}
+```
+
+**Finish Work:**
+```json
+{
+  "message": "Status updated successfully",
+  "id": 16,
+  "project_name": "Ticking managemt5135",
+  "status_display": "Resolved"
+}
+```
+
+**Approve/Reject:**
+```json
+{
+  "message": "Status updated to Closed",
+  "id": 16,
+  "project_name": "Ticking managemt5135",
+  "status_display": "Closed"
+}
+```
+
+**Upload Attachment:**
+```json
+{
+  "message": "Attachment uploaded to ticket #16 successfully",
+  "ticket_id": 16,
+  "attachment_id": 5
+}
+```
+
+---
+
+## Permission Changes
+
+### Ticket Creation
+- ✅ **Clients**: Can create tickets
+- ✅ **Admins**: Can create tickets
+- ❌ **Developers**: CANNOT create tickets
+
+### Approve/Reject Actions
+- ✅ **Ticket creator** (Client or Admin who created it) can approve/reject
+- ❌ Other admins cannot approve/reject tickets they didn't create
+
+---
+
+**Total Endpoints:** 34 (29 REST + 5 Notification APIs)  
+**Last Updated:** December 25, 2025

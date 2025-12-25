@@ -7,17 +7,19 @@ Works alongside email and WhatsApp notifications
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
+from .models import NotificationLog
 
 
-def send_websocket_notification(user_ids, notification_type, ticket_data, message):
+def send_websocket_notification(user_ids, notification_type, ticket_data, message, ticket=None):
     """
-    Send real-time notification to specific users via WebSocket
+    Send real-time notification to specific users via WebSocket and save to database
     
     Args:
         user_ids: List of user IDs or single user ID
         notification_type: Type of notification (ticket_created, ticket_opened, etc.)
         ticket_data: Dictionary containing ticket information
         message: Human-readable message
+        ticket: Ticket instance (optional, for logging)
     """
     channel_layer = get_channel_layer()
     
@@ -43,6 +45,21 @@ def send_websocket_notification(user_ids, notification_type, ticket_data, messag
             group_name,
             notification_data
         )
+        
+        # Save SYSTEM notification to database
+        try:
+            recipient = User.objects.get(id=user_id)
+            NotificationLog.objects.create(
+                ticket=ticket,
+                recipient=recipient,
+                notification_type='SYSTEM',
+                subject=f'{notification_type.replace("_", " ").title()}',
+                message=message,
+                status='SENT'
+            )
+            print(f"✅ SYSTEM notification saved for user {user_id}")
+        except Exception as e:
+            print(f"❌ Failed to save SYSTEM notification for user {user_id}: {e}")
 
 
 def notify_admins_new_ticket(ticket):
@@ -76,7 +93,8 @@ def notify_admins_new_ticket(ticket):
         user_ids=admin_ids,
         notification_type='ticket_created',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -98,7 +116,8 @@ def notify_client_ticket_opened_ws(ticket):
         user_ids=ticket.created_by.id,
         notification_type='ticket_opened',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -134,7 +153,8 @@ def notify_developers_assignment_ws(ticket, developers):
         user_ids=developer_ids,
         notification_type='ticket_assigned',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -156,7 +176,8 @@ def notify_client_work_started_ws(ticket):
         user_ids=ticket.created_by.id,
         notification_type='work_started',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -178,7 +199,8 @@ def notify_client_work_finished_ws(ticket):
         user_ids=ticket.created_by.id,
         notification_type='work_finished',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -214,7 +236,8 @@ def notify_ticket_approved_ws(ticket):
         user_ids=recipient_ids,
         notification_type='ticket_approved',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )
 
 
@@ -250,5 +273,6 @@ def notify_ticket_rejected_ws(ticket, comment):
         user_ids=recipient_ids,
         notification_type='ticket_rejected',
         ticket_data=ticket_data,
-        message=message
+        message=message,
+        ticket=ticket
     )

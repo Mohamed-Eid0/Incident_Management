@@ -4,6 +4,14 @@ from django.contrib.auth.models import User
 from .models import NotificationLog
 
 
+def get_assigned_names(ticket):
+    """Helper to get comma-separated list of assigned developer names"""
+    assigned = ticket.assigned_to.all()
+    if assigned.exists():
+        return ', '.join([dev.get_full_name() or dev.username for dev in assigned])
+    return 'Team'
+
+
 def send_notification_email(ticket, recipient, subject, message, html_message=None, notification_type='EMAIL'):
     """
     Send email and log notification
@@ -216,7 +224,7 @@ Good news! A developer has started working on your ticket.
 
 Ticket: {ticket.title}
 Project: {ticket.project_name}
-Assigned To: {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+Assigned To: {get_assigned_names(ticket)}
 Status: In Progress
 
 We will notify you once the work is completed.
@@ -235,7 +243,7 @@ Support Team
             <table style="margin: 20px 0;">
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Ticket:</td><td style="padding: 5px 10px;">{ticket.title}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Project:</td><td style="padding: 5px 10px;">{ticket.project_name}</td></tr>
-                <tr><td style="padding: 5px 10px; font-weight: bold;">Assigned To:</td><td style="padding: 5px 10px;">{ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}</td></tr>
+                <tr><td style="padding: 5px 10px; font-weight: bold;">Assigned To:</td><td style="padding: 5px 10px;">{get_assigned_names(ticket)}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Status:</td><td style="padding: 5px 10px;"><span style="color: #3498db; font-weight: bold;">In Progress</span></td></tr>
             </table>
             <p>We will notify you once the work is completed.</p>
@@ -262,7 +270,7 @@ Your ticket has been resolved and is now waiting for your approval.
 
 Ticket: {ticket.title}
 Project: {ticket.project_name}
-Resolved By: {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Support Team'}
+Resolved By: {get_assigned_names(ticket)}
 
 If the issue is not resolved, you can reject and request additional work.
 
@@ -280,7 +288,7 @@ Support Team
             <table style="margin: 20px 0;">
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Ticket:</td><td style="padding: 5px 10px;">{ticket.title}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Project:</td><td style="padding: 5px 10px;">{ticket.project_name}</td></tr>
-                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Support Team'}</td></tr>
+                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{get_assigned_names(ticket)}</td></tr>
             </table>
             <p><a href="{ticket_url}" style="display: inline-block; padding: 10px 20px; background-color: #27ae60; color: white; text-decoration: none; border-radius: 5px;">Click here to review and approve</a></p>
             <p>If the issue is not resolved, you can reject and request additional work.</p>
@@ -310,7 +318,7 @@ A ticket has been marked as resolved and is awaiting client approval:
 Ticket: {ticket.title}
 Project: {ticket.project_name}
 Client: {ticket.created_by.get_full_name() or ticket.created_by.username}
-Resolved By: {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+Resolved By: {get_assigned_names(ticket)}
 Status: Waiting for Approval
 
 Best regards,
@@ -328,7 +336,7 @@ Incident Management System
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Ticket:</td><td style="padding: 5px 10px;">{ticket.title}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Project:</td><td style="padding: 5px 10px;">{ticket.project_name}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Client:</td><td style="padding: 5px 10px;">{ticket.created_by.get_full_name() or ticket.created_by.username}</td></tr>
-                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}</td></tr>
+                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{get_assigned_names(ticket)}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Status:</td><td style="padding: 5px 10px;"><span style="color: #9b59b6; font-weight: bold;">Waiting for Approval</span></td></tr>
             </table>
             <p><a href="{ticket_url}" style="display: inline-block; padding: 10px 20px; background-color: #9b59b6; color: white; text-decoration: none; border-radius: 5px;">Click here to view ticket</a></p>
@@ -359,7 +367,7 @@ A ticket has been closed by the client:
 Ticket: {ticket.title}
 Project: {ticket.project_name}
 Client: {ticket.created_by.get_full_name() or ticket.created_by.username}
-Resolved By: {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+Resolved By: {get_assigned_names(ticket)}
 
 The client has approved the resolution.
 
@@ -378,7 +386,7 @@ Incident Management System
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Ticket:</td><td style="padding: 5px 10px;">{ticket.title}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Project:</td><td style="padding: 5px 10px;">{ticket.project_name}</td></tr>
                 <tr><td style="padding: 5px 10px; font-weight: bold;">Client:</td><td style="padding: 5px 10px;">{ticket.created_by.get_full_name() or ticket.created_by.username}</td></tr>
-                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}</td></tr>
+                <tr><td style="padding: 5px 10px; font-weight: bold;">Resolved By:</td><td style="padding: 5px 10px;">{get_assigned_names(ticket)}</td></tr>
             </table>
             <p style="color: #2ecc71; font-weight: bold;">✓ The client has approved the resolution.</p>
             <p style="margin-top: 20px;">Best regards,<br>Incident Management System</p>
@@ -389,11 +397,13 @@ Incident Management System
     for admin in admins:
         send_notification_email(ticket, admin, subject, admin_message, admin_html)
     
-    # Notify developer
-    if ticket.assigned_to:
-        # Developer plain text version
-        dev_message = f"""
-Hello {ticket.assigned_to.get_full_name() or ticket.assigned_to.username},
+    # Notify developers
+    assigned_devs = ticket.assigned_to.all()
+    if assigned_devs.exists():
+        for developer in assigned_devs:
+            # Developer plain text version
+            dev_message = f"""
+Hello {developer.get_full_name() or developer.username},
 
 The ticket you worked on has been closed and approved by the client:
 
@@ -407,12 +417,12 @@ Best regards,
 Incident Management System
         """
         
-        # Developer HTML version
-        dev_html = f"""
+            # Developer HTML version
+            dev_html = f"""
         <html>
             <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
                 <h2 style="color: #2ecc71;">Ticket Closed - Great Job! 🎉</h2>
-                <p>Hello {ticket.assigned_to.get_full_name() or ticket.assigned_to.username},</p>
+                <p>Hello {developer.get_full_name() or developer.username},</p>
                 <p>The ticket you worked on has been closed and approved by the client:</p>
                 <table style="margin: 20px 0;">
                     <tr><td style="padding: 5px 10px; font-weight: bold;">Ticket:</td><td style="padding: 5px 10px;">{ticket.title}</td></tr>
@@ -425,4 +435,4 @@ Incident Management System
         </html>
         """
         
-        send_notification_email(ticket, ticket.assigned_to, subject, dev_message, dev_html)
+            send_notification_email(ticket, developer, subject, dev_message, dev_html)

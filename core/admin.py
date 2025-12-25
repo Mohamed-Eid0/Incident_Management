@@ -107,7 +107,7 @@ class TicketAdmin(admin.ModelAdmin):
     
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        return qs.select_related('created_by', 'assigned_to')
+        return qs.select_related('created_by').prefetch_related('assigned_to')
 
 
 @admin.register(TicketAttachment)

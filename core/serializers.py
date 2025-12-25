@@ -47,18 +47,26 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 
 class TicketAttachmentSerializer(serializers.ModelSerializer):
-    """Serializer for TicketAttachment model"""
+    """Serializer for TicketAttachment model with base64 encoded file data"""
     uploaded_by_name = serializers.CharField(source='uploaded_by.get_full_name', read_only=True)
+    file_data = serializers.SerializerMethodField()
     
     class Meta:
         model = TicketAttachment
         fields = ['id', 'ticket', 'file_data', 'uploaded_by', 'uploaded_by_name', 'uploaded_at']
         read_only_fields = ['id', 'uploaded_at']
+    
+    def get_file_data(self, obj):
+        """Return file data as base64 encoded string"""
+        import base64
+        if obj.file_data:
+            return base64.b64encode(obj.file_data).decode('utf-8')
+        return None
 
 
 class TicketHistorySerializer(serializers.ModelSerializer):
     """Serializer for TicketHistory model"""
-    changed_by_name = serializers.CharField(source='changed_by.get_full_name', read_only=True)
+    changed_by_name = serializers.SerializerMethodField()
     status_from_display = serializers.CharField(source='get_status_from_display', read_only=True)
     status_to_display = serializers.CharField(source='get_status_to_display', read_only=True)
     
@@ -66,6 +74,13 @@ class TicketHistorySerializer(serializers.ModelSerializer):
         model = TicketHistory
         fields = ['id', 'ticket', 'changed_by', 'changed_by_name', 'status_from', 'status_from_display', 'status_to', 'status_to_display', 'comment', 'timestamp']
         read_only_fields = ['id', 'timestamp']
+    
+    def get_changed_by_name(self, obj):
+        """Get full name or username as fallback"""
+        if obj.changed_by:
+            full_name = obj.changed_by.get_full_name()
+            return full_name if full_name else obj.changed_by.username
+        return "System"
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -128,6 +143,29 @@ class TicketSerializer(serializers.ModelSerializer):
                 )
         
         return value
+
+
+class TicketListSerializer(serializers.ModelSerializer):
+    """Minimal serializer for ticket lists - excludes attachments and history for performance"""
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+    assigned_to_names = serializers.SerializerMethodField()
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = Ticket
+        fields = [
+            'id', 'project_name', 'title', 'description',
+            'priority', 'priority_display', 'category', 'category_display',
+            'status', 'status_display',
+            'created_by', 'created_by_name',
+            'assigned_to', 'assigned_to_names', 'assigned_team'
+        ]
+    
+    def get_assigned_to_names(self, obj):
+        """Get names of all assigned developers"""
+        return [user.get_full_name() or user.username for user in obj.assigned_to.all()]
 
 
 class TicketAdminSerializer(TicketSerializer):

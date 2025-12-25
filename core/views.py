@@ -6,7 +6,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from .models import Ticket, TicketHistory, UserProfile, NotificationLog
 from .serializers import (
-    TicketSerializer, TicketAdminSerializer,
+    TicketSerializer, TicketAdminSerializer, TicketListSerializer,
     UserSerializer, UserProfileSerializer,
     NotificationLogSerializer
 )
@@ -121,13 +121,24 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Ticket.objects.none()
     
     def get_serializer_class(self):
-        """Use different serializers for admins vs others"""
+        """Use different serializers for list vs detail and for admins vs others"""
+        # Use minimal serializer for list view (no attachments/history)
+        if self.action == 'list':
+            from .serializers import TicketListSerializer
+            return TicketListSerializer
+        
+        # Use full serializer for detail view
         if hasattr(self.request.user, 'profile') and self.request.user.profile.role == 'ADMIN':
             return TicketAdminSerializer
         return TicketSerializer
     
     def perform_create(self, serializer):
         """Set the created_by field to the current user and send notification"""
+        # Only clients and admins can create tickets (NOT developers)
+        if hasattr(self.request.user, 'profile') and self.request.user.profile.role == 'SUPPORT':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Developers cannot create tickets. Only clients and admins can create tickets.')
+        
         ticket = serializer.save(created_by=self.request.user)
         
         # Send email notification to admin
@@ -141,9 +152,37 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_admins_new_ticket
         notify_admins_new_ticket(ticket)
     
+    def create(self, request, *args, **kwargs):
+        """Override create to return minimal response"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        ticket = serializer.instance
+        
+        # Return minimal response with only essential fields
+        return Response({
+            'id': ticket.id,
+            'project_name': ticket.project_name,
+            'priority_display': ticket.get_priority_display(),
+            'category_display': ticket.get_category_display(),
+            'status_display': ticket.get_status_display(),
+            'created_by': ticket.created_by.id,
+            'created_by_name': ticket.created_by.get_full_name() or ticket.created_by.username,
+            'response_due_at': ticket.response_due_at,
+            'response_sla_minutes': ticket.get_response_sla_minutes()
+        }, status=status.HTTP_201_CREATED)
+    
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def open_ticket(self, request, pk=None):
         """Admin action to open a ticket (acknowledge receipt)"""
+        # Double-check admin permission (extra security layer)
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'ADMIN':
+            return Response(
+                {'error': 'Only administrators can open tickets'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         ticket = self.get_object()
         
         if ticket.status != 'NEW':
@@ -168,11 +207,23 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_client_ticket_opened_ws
         notify_client_ticket_opened_ws(ticket)
         
-        return Response(self.get_serializer(ticket).data)
+        return Response({
+            'message': 'Ticket opened successfully',
+            'id': ticket.id,
+            'title': ticket.title,
+            'status_display': ticket.get_status_display()
+        })
     
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def assign(self, request, pk=None):
         """Admin action to assign ticket to support user(s) with validation"""
+        # Double-check admin permission (extra security layer)
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'ADMIN':
+            return Response(
+                {'error': 'Only administrators can assign tickets to developers'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         ticket = self.get_object()
         
         # Use serializer for input validation
@@ -236,18 +287,27 @@ class TicketViewSet(viewsets.ModelViewSet):
                 from .notification_service import notify_developers_assignment_ws
                 notify_developers_assignment_ws(ticket, list(newly_assigned))
         
-        return Response(self.get_serializer(ticket).data)
+        assigned_names = ', '.join([u.get_full_name() or u.username for u in support_users])
+        return Response({
+            'message': 'Developers assigned successfully',
+            'id': ticket.id,
+            'title': ticket.title,
+            'assigned_to_names': assigned_names
+        })
     
     @action(detail=True, methods=['post'])
     def start_work(self, request, pk=None):
         """Developer action to start working on ticket"""
         ticket = self.get_object()
         
-        # Check if user is assigned to this ticket or is admin
+        # ONLY assigned developers can start work (NOT admins)
         if not (hasattr(request.user, 'profile') and 
-                (request.user.profile.role == 'ADMIN' or 
-                 ticket.assigned_to.filter(id=request.user.id).exists())):
-            return Response({'error': 'You are not assigned to this ticket'}, status=status.HTTP_403_FORBIDDEN)
+                request.user.profile.role == 'SUPPORT' and
+                ticket.assigned_to.filter(id=request.user.id).exists()):
+            return Response(
+                {'error': 'Only developers assigned to this ticket can start work'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         if ticket.status not in ['OPENED', 'IN_PROGRESS']:
             return Response({'error': 'Ticket cannot be started in current status'}, status=status.HTTP_400_BAD_REQUEST)
@@ -272,18 +332,27 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_client_work_started_ws
         notify_client_work_started_ws(ticket)
         
-        return Response(self.get_serializer(ticket).data)
+        return Response({
+            'message': 'Status updated successfully',
+            'id': ticket.id,
+            'project_name': ticket.project_name,
+            'status_display': ticket.get_status_display(),
+            'estimated_resolution_time': ticket.estimated_resolution_time
+        })
     
     @action(detail=True, methods=['post'])
     def finish_work(self, request, pk=None):
         """Developer action to mark work as finished with validation"""
         ticket = self.get_object()
         
-        # Check if user is assigned to this ticket or is admin
+        # ONLY assigned developers can finish work (NOT admins)
         if not (hasattr(request.user, 'profile') and 
-                (request.user.profile.role == 'ADMIN' or 
-                 ticket.assigned_to.filter(id=request.user.id).exists())):
-            return Response({'error': 'You are not assigned to this ticket'}, status=status.HTTP_403_FORBIDDEN)
+                request.user.profile.role == 'SUPPORT' and
+                ticket.assigned_to.filter(id=request.user.id).exists()):
+            return Response(
+                {'error': 'Only developers assigned to this ticket can finish work'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         if ticket.status != 'IN_PROGRESS':
             return Response({'error': 'Ticket is not in progress'}, status=status.HTTP_400_BAD_REQUEST)
@@ -314,28 +383,53 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_client_work_finished_ws
         notify_client_work_finished_ws(ticket)
         
-        return Response(self.get_serializer(ticket).data)
+        return Response({
+            'message': 'Status updated successfully',
+            'id': ticket.id,
+            'project_name': ticket.project_name,
+            'status_display': ticket.get_status_display()
+        })
     
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
-        """Client action to approve completed work"""
+        """Client or admin creator action to approve completed work"""
         ticket = self.get_object()
         
-        # Only ticket creator can approve
+        # Only ticket creator can approve (CLIENT or ADMIN who created it)
         if ticket.created_by != request.user:
-            return Response({'error': 'Only ticket creator can approve'}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {'error': 'Only the ticket creator can approve this ticket'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
+        # Ticket creator must be CLIENT or ADMIN role
+        if not hasattr(request.user, 'profile') or request.user.profile.role not in ['CLIENT', 'ADMIN']:
+            return Response(
+                {'error': 'Only clients or admins can approve tickets'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Strict validation: ticket MUST be in RESOLVED or WAITING_APPROVAL status
         if ticket.status not in ['RESOLVED', 'WAITING_APPROVAL']:
-            return Response({'error': 'Ticket is not awaiting approval'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    'error': 'Ticket is not awaiting approval',
+                    'current_status': ticket.status,
+                    'required_status': ['RESOLVED', 'WAITING_APPROVAL'],
+                    'message': 'Developer must finish work before client can approve'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
+        old_status = ticket.status
         ticket.status = 'CLOSED'
         ticket.save()
         
-        # Create history entry
+        # Create history entry with actual old status
         TicketHistory.objects.create(
             ticket=ticket,
             changed_by=request.user,
-            status_from='RESOLVED',
+            status_from=old_status,
             status_to='CLOSED',
             comment='Ticket approved and closed by client'
         )
@@ -347,16 +441,31 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_ticket_approved_ws
         notify_ticket_approved_ws(ticket)
         
-        return Response(self.get_serializer(ticket).data)
+        return Response({
+            'message': f'Status updated to {ticket.get_status_display()}',
+            'id': ticket.id,
+            'project_name': ticket.project_name,
+            'status_display': ticket.get_status_display()
+        })
     
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
-        """Client action to reject work and request more changes with validation"""
+        """Client or admin creator action to reject work and request more changes with validation"""
         ticket = self.get_object()
         
-        # Only ticket creator can reject
+        # Only ticket creator can reject (CLIENT or ADMIN who created it)
         if ticket.created_by != request.user:
-            return Response({'error': 'Only ticket creator can reject'}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {'error': 'Only the ticket creator can reject this ticket'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Ticket creator must be CLIENT or ADMIN role
+        if not hasattr(request.user, 'profile') or request.user.profile.role not in ['CLIENT', 'ADMIN']:
+            return Response(
+                {'error': 'Only clients or admins can reject tickets'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         if ticket.status not in ['RESOLVED', 'WAITING_APPROVAL']:
             return Response({'error': 'Ticket is not awaiting approval'}, status=status.HTTP_400_BAD_REQUEST)
@@ -387,7 +496,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         from .notification_service import notify_ticket_rejected_ws
         notify_ticket_rejected_ws(ticket, rejection_reason)
         
-        return Response(self.get_serializer(ticket).data)
+        return Response({
+            'message': f'Status updated to {ticket.get_status_display()}',
+            'id': ticket.id,
+            'project_name': ticket.project_name,
+            'status_display': ticket.get_status_display()
+        })
     
     @action(detail=False, methods=['get'], permission_classes=[IsAdminUser])
     def developers(self, request):
@@ -416,6 +530,164 @@ class TicketViewSet(viewsets.ModelViewSet):
         )
         
         return Response({'message': 'Comment added successfully'})
+    
+    @action(detail=True, methods=['post'])
+    def add_attachment(self, request, pk=None):
+        """Add a file attachment to the ticket"""
+        from .models import TicketAttachment
+        
+        ticket = self.get_object()
+        
+        # Check if user has access to this ticket
+        user = request.user
+        has_access = False
+        
+        if hasattr(user, 'profile'):
+            if user.profile.role == 'ADMIN':
+                has_access = True
+            elif user.profile.role == 'SUPPORT' and ticket.assigned_to.filter(id=user.id).exists():
+                has_access = True
+            elif user.profile.role == 'CLIENT' and ticket.created_by == user:
+                has_access = True
+        
+        if not has_access:
+            return Response(
+                {'error': 'You do not have permission to add attachments to this ticket'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get file data from request
+        file_data = request.data.get('file_data')
+        
+        if not file_data:
+            return Response(
+                {'error': 'file_data is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Read the file content as bytes
+        try:
+            file_bytes = file_data.read()
+        except AttributeError:
+            return Response(
+                {'error': 'Invalid file data provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create attachment
+        attachment = TicketAttachment.objects.create(
+            ticket=ticket,
+            file_data=file_bytes,
+            uploaded_by=user
+        )
+        
+        return Response({
+            'message': f'Attachment uploaded to ticket #{ticket.id} successfully',
+            'ticket_id': ticket.id,
+            'attachment_id': attachment.id
+        })
+    
+    @action(detail=True, methods=['delete'], url_path='delete_attachment/(?P<attachment_id>[^/.]+)')
+    def delete_attachment(self, request, pk=None, attachment_id=None):
+        """
+        Delete a ticket attachment with role-based permissions
+        
+        Rules:
+        - Client can ONLY delete their own attachments
+        - Developer can delete their own attachments
+        - Admin can delete attachments uploaded by admins or developers (NOT clients)
+        """
+        from .models import TicketAttachment
+        
+        ticket = self.get_object()
+        
+        # Get the attachment
+        try:
+            attachment = TicketAttachment.objects.get(id=attachment_id, ticket=ticket)
+        except TicketAttachment.DoesNotExist:
+            return Response(
+                {'error': 'Attachment not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        user = request.user
+        uploader = attachment.uploaded_by
+        
+        # Get roles
+        user_role = user.profile.role if hasattr(user, 'profile') else None
+        uploader_role = uploader.profile.role if hasattr(uploader, 'profile') else None
+        
+        can_delete = False
+        
+        if user == uploader:
+            # User can always delete their own attachments
+            can_delete = True
+        elif user_role == 'ADMIN':
+            # Admin can delete attachments from admins or developers (NOT clients)
+            if uploader_role in ['ADMIN', 'SUPPORT']:
+                can_delete = True
+            else:
+                return Response(
+                    {'error': 'Admins cannot delete attachments uploaded by clients'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        elif user_role == 'CLIENT':
+            # Clients can ONLY delete their own attachments (already checked above)
+            return Response(
+                {'error': 'You can only delete attachments you uploaded'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        elif user_role == 'SUPPORT':
+            # Developers can ONLY delete their own attachments (already checked above)
+            return Response(
+                {'error': 'You can only delete attachments you uploaded'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        if not can_delete:
+            return Response(
+                {'error': 'You do not have permission to delete this attachment'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Delete the attachment
+        attachment_id_deleted = attachment.id
+        attachment.delete()
+        
+        return Response({
+            'message': 'Attachment deleted successfully',
+            'attachment_id': attachment_id_deleted
+        })
+    
+    @action(detail=True, methods=['get'])
+    def get_attachments(self, request, pk=None):
+        """
+        Get all attachments for a ticket in base64 format
+        
+        All users can access attachments for tickets they have permission to view:
+        - Admins: All tickets
+        - Developers: Assigned tickets
+        - Clients: Their own tickets
+        """
+        from .models import TicketAttachment
+        
+        ticket = self.get_object()
+        
+        # Check if user has access to this ticket (get_object already checks this via get_queryset)
+        # If they got here, they have access
+        
+        # Get all attachments for this ticket
+        attachments = TicketAttachment.objects.filter(ticket=ticket).select_related('uploaded_by')
+        
+        from .serializers import TicketAttachmentSerializer
+        serializer = TicketAttachmentSerializer(attachments, many=True)
+        
+        return Response({
+            'ticket_id': ticket.id,
+            'ticket_title': ticket.title,
+            'attachments_count': attachments.count(),
+            'attachments': serializer.data
+        })
 
 
 class UpdateOwnProfileView(generics.UpdateAPIView):
@@ -506,47 +778,45 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
 
 class NotificationLogViewSet(viewsets.GenericViewSet, 
-                             mixins.ListModelMixin):
+                             mixins.ListModelMixin,
+                             mixins.RetrieveModelMixin):
     """
     ViewSet for viewing and managing notification logs
     
     Provides endpoints for:
     - List all notifications (with filtering) - returns minimal data only
+    - Retrieve individual notification details
     - Get unread count
     - Mark individual notification as read
     - Mark all notifications as read
     
-    Note: No detailed view endpoint - all endpoints return minimal data for security/performance
+    Note: Retrieve endpoint returns full notification details
     """
     serializer_class = NotificationLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
         """
-        Users see their own notifications, admins see all
+        All users (including admins) see only their own SYSTEM notifications
         Supports filtering by:
         - is_read: true/false
-        - notification_type: EMAIL, WHATSAPP, SYSTEM
         - ticket: ticket ID
+        
+        Note: Only SYSTEM notifications are returned (EMAIL and WHATSAPP excluded)
         """
         base_queryset = NotificationLog.objects.select_related('recipient', 'ticket')
         
-        # Role-based filtering
-        if hasattr(self.request.user, 'profile') and self.request.user.profile.role == 'ADMIN':
-            queryset = base_queryset.all()
-        else:
-            queryset = base_queryset.filter(recipient=self.request.user)
+        # Everyone sees only their own SYSTEM notifications
+        queryset = base_queryset.filter(
+            recipient=self.request.user,
+            notification_type='SYSTEM'
+        )
         
         # Filter by read status
         is_read = self.request.query_params.get('is_read', None)
         if is_read is not None:
             is_read_bool = is_read.lower() in ['true', '1', 'yes']
             queryset = queryset.filter(is_read=is_read_bool)
-        
-        # Filter by notification type
-        notification_type = self.request.query_params.get('notification_type', None)
-        if notification_type:
-            queryset = queryset.filter(notification_type=notification_type.upper())
         
         # Filter by ticket
         ticket_id = self.request.query_params.get('ticket', None)
@@ -558,36 +828,21 @@ class NotificationLogViewSet(viewsets.GenericViewSet,
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
         """
-        Get count of unread notifications for current user
+        Get count of unread SYSTEM notifications for current user
         
         Response:
         {
-            "count": 5,
-            "by_type": {
-                "EMAIL": 2,
-                "WHATSAPP": 1,
-                "SYSTEM": 2
-            }
+            "count": 5
         }
         """
-        unread_notifications = NotificationLog.objects.filter(
+        unread_count = NotificationLog.objects.filter(
             recipient=request.user,
+            notification_type='SYSTEM',
             is_read=False
-        )
-        
-        total_count = unread_notifications.count()
-        
-        # Count by type
-        from django.db.models import Count
-        by_type = dict(
-            unread_notifications.values('notification_type')
-            .annotate(count=Count('id'))
-            .values_list('notification_type', 'count')
-        )
+        ).count()
         
         return Response({
-            'count': total_count,
-            'by_type': by_type
+            'count': unread_count
         })
     
     @action(detail=True, methods=['post'])
@@ -599,13 +854,12 @@ class NotificationLogViewSet(viewsets.GenericViewSet,
         """
         notification = self.get_object()
         
-        # Ensure user owns this notification (non-admins)
+        # Ensure user owns this notification
         if notification.recipient != request.user:
-            if not (hasattr(request.user, 'profile') and request.user.profile.role == 'ADMIN'):
-                return Response(
-                    {'error': 'You can only mark your own notifications as read'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            return Response(
+                {'error': 'You can only mark your own notifications as read'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         notification.mark_as_read()
         
@@ -618,24 +872,20 @@ class NotificationLogViewSet(viewsets.GenericViewSet,
     @action(detail=False, methods=['post'])
     def mark_all_as_read(self, request):
         """
-        Mark all notifications as read for current user
+        Mark all SYSTEM notifications as read for current user
         
-        Optional query parameters:
-        - notification_type: Only mark specific type as read (EMAIL, WHATSAPP, SYSTEM)
+        Optional query parameter:
         - ticket: Only mark notifications for specific ticket as read
         
         Returns count of notifications marked as read
         """
         queryset = NotificationLog.objects.filter(
             recipient=request.user,
+            notification_type='SYSTEM',
             is_read=False
         )
         
-        # Optional filtering
-        notification_type = request.query_params.get('notification_type', None)
-        if notification_type:
-            queryset = queryset.filter(notification_type=notification_type.upper())
-        
+        # Optional filtering by ticket
         ticket_id = request.query_params.get('ticket', None)
         if ticket_id:
             queryset = queryset.filter(ticket_id=ticket_id)

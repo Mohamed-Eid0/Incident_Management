@@ -22,6 +22,14 @@ import requests
 import json
 
 
+def get_assigned_names(ticket):
+    """Helper function to get comma-separated assigned developer names"""
+    assigned = ticket.assigned_to.all()
+    if assigned.exists():
+        return ', '.join([dev.get_full_name() or dev.username for dev in assigned])
+    return 'Team'
+
+
 def get_whatsapp_config():
     """Get WhatsApp Cloud API configuration"""
     access_token = getattr(settings, 'WHATSAPP_ACCESS_TOKEN', None)
@@ -268,7 +276,7 @@ Good news! A developer has started working on your ticket.
 
 *Ticket:* {ticket.title}
 *Project:* {ticket.project_name}
-*Assigned To:* {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+*Assigned To:* {get_assigned_names(ticket)}
 *Status:* In Progress
 
 We will notify you once the work is completed.
@@ -294,7 +302,7 @@ Your ticket has been resolved and is now waiting for your approval.
 
 *Ticket:* {ticket.title}
 *Project:* {ticket.project_name}
-*Resolved By:* {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Support Team'}
+*Resolved By:* {get_assigned_names(ticket)}
 
 Please review the resolution and approve if the issue is fixed. If the issue is not resolved, you can reject and request additional work.
 
@@ -317,7 +325,7 @@ A ticket has been marked as resolved and is awaiting client approval:
 *Ticket:* {ticket.title}
 *Project:* {ticket.project_name}
 *Client:* {ticket.created_by.get_full_name() or ticket.created_by.username}
-*Resolved By:* {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+*Resolved By:* {get_assigned_names(ticket)}
 *Status:* Waiting for Approval
 
 _Incident Management System_
@@ -341,7 +349,7 @@ A ticket has been closed by the client:
 *Ticket:* {ticket.title}
 *Project:* {ticket.project_name}
 *Client:* {ticket.created_by.get_full_name() or ticket.created_by.username}
-*Resolved By:* {ticket.assigned_to.get_full_name() or ticket.assigned_to.username if ticket.assigned_to else 'Team'}
+*Resolved By:* {get_assigned_names(ticket)}
 
 The client has approved the resolution.
 
@@ -351,11 +359,14 @@ _Incident Management System_
     for admin in admins:
         send_whatsapp_message(ticket, admin, admin_message)
     
-    # Notify developer
-    if ticket.assigned_to and hasattr(ticket.assigned_to, 'profile') and ticket.assigned_to.profile.whatsapp_number:
-        dev_message = f"""🎉 *Ticket Closed - Great Job!*
+    # Notify developers
+    assigned_devs = ticket.assigned_to.all()
+    if assigned_devs.exists():
+        for developer in assigned_devs:
+            if hasattr(developer, 'profile') and developer.profile.whatsapp_number:
+                dev_message = f"""🎉 *Ticket Closed - Great Job!*
 
-Hello {ticket.assigned_to.get_full_name() or ticket.assigned_to.username},
+Hello {developer.get_full_name() or developer.username},
 
 The ticket you worked on has been closed and approved by the client:
 
@@ -367,23 +378,25 @@ Great work!
 
 _Incident Management System_
         """
-        
-        send_whatsapp_message(ticket, ticket.assigned_to, dev_message)
+                
+                send_whatsapp_message(ticket, developer, dev_message)
 
 
 def notify_ticket_rejected_whatsapp(ticket, rejection_reason):
     """
-    Notify developer via WhatsApp when client rejects the resolution
+    Notify developers via WhatsApp when client rejects the resolution
     """
-    if not ticket.assigned_to:
+    assigned_devs = ticket.assigned_to.all()
+    if not assigned_devs.exists():
         return
     
-    if not hasattr(ticket.assigned_to, 'profile') or not ticket.assigned_to.profile.whatsapp_number:
-        return
-    
-    message = f"""🔄 *Ticket Rejected - More Work Needed*
+    for developer in assigned_devs:
+        if not hasattr(developer, 'profile') or not developer.profile.whatsapp_number:
+            continue
+        
+        message = f"""🔄 *Ticket Rejected - More Work Needed*
 
-Hello {ticket.assigned_to.get_full_name() or ticket.assigned_to.username},
+Hello {developer.get_full_name() or developer.username},
 
 The client has rejected the resolution for this ticket:
 
@@ -398,5 +411,5 @@ Please review the feedback and continue working on the ticket.
 
 _Incident Management System_
     """
-    
-    send_whatsapp_message(ticket, ticket.assigned_to, message)
+        
+        send_whatsapp_message(ticket, developer, message)

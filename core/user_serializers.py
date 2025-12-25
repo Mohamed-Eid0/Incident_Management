@@ -80,13 +80,15 @@ class UserCreateSerializer(serializers.ModelSerializer):
         # Create user
         user = User.objects.create_user(**validated_data)
         
-        # Create profile
-        UserProfile.objects.create(
+        # Update or create profile (signal may have already created it)
+        UserProfile.objects.update_or_create(
             user=user,
-            role=role,
-            phone_number=phone_number,
-            whatsapp_number=whatsapp_number,
-            department=department
+            defaults={
+                'role': role,
+                'phone_number': phone_number,
+                'whatsapp_number': whatsapp_number,
+                'department': department
+            }
         )
         
         return user

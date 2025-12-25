@@ -12,6 +12,45 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+import sqlite3
+
+# Monkey patch for Django 6.0 SQLite compatibility
+# Add missing getlimit method to SQLite connection
+if not hasattr(sqlite3.Connection, 'getlimit'):
+    def _getlimit(self, category):
+        """Get SQLite limit for the given category"""
+        # SQLite limit categories
+        SQLITE_LIMIT_LENGTH = 0
+        SQLITE_LIMIT_SQL_LENGTH = 1
+        SQLITE_LIMIT_COLUMN = 2
+        SQLITE_LIMIT_EXPR_DEPTH = 3
+        SQLITE_LIMIT_COMPOUND_SELECT = 4
+        SQLITE_LIMIT_VDBE_OP = 5
+        SQLITE_LIMIT_FUNCTION_ARG = 6
+        SQLITE_LIMIT_ATTACHED = 7
+        SQLITE_LIMIT_LIKE_PATTERN_LENGTH = 8
+        SQLITE_LIMIT_VARIABLE_NUMBER = 9
+        SQLITE_LIMIT_TRIGGER_DEPTH = 10
+        SQLITE_LIMIT_WORKER_THREADS = 11
+        
+        # Default limits for SQLite (can be queried with PRAGMA)
+        limits = {
+            SQLITE_LIMIT_LENGTH: 1000000000,
+            SQLITE_LIMIT_SQL_LENGTH: 1000000000,
+            SQLITE_LIMIT_COLUMN: 2000,
+            SQLITE_LIMIT_EXPR_DEPTH: 1000,
+            SQLITE_LIMIT_COMPOUND_SELECT: 500,
+            SQLITE_LIMIT_VDBE_OP: 250000000,
+            SQLITE_LIMIT_FUNCTION_ARG: 127,
+            SQLITE_LIMIT_ATTACHED: 10,
+            SQLITE_LIMIT_LIKE_PATTERN_LENGTH: 50000,
+            SQLITE_LIMIT_VARIABLE_NUMBER: 32766,
+            SQLITE_LIMIT_TRIGGER_DEPTH: 1000,
+            SQLITE_LIMIT_WORKER_THREADS: 0,
+        }
+        return limits.get(category, -1)
+    
+    sqlite3.Connection.getlimit = _getlimit
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -200,7 +239,7 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'me.mohamed.eid0@gmail.com'
-EMAIL_HOST_PASSWORD = 'fioe okhq jcjv gqxy'  # Add Gmail App Password here (not your regular password)
+EMAIL_HOST_PASSWORD = 'rcdm ggfa hfcz ownk'  # Add Gmail App Password here (not your regular password)
 DEFAULT_FROM_EMAIL = 'me.mohamed.eid0@gmail.com'
 
 # Frontend URL for email links (update for production)
