@@ -12,45 +12,75 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
-import sqlite3
+import sys
 
 # Monkey patch for Django 6.0 SQLite compatibility
 # Add missing getlimit method to SQLite connection
-if not hasattr(sqlite3.Connection, 'getlimit'):
-    def _getlimit(self, category):
-        """Get SQLite limit for the given category"""
-        # SQLite limit categories
-        SQLITE_LIMIT_LENGTH = 0
-        SQLITE_LIMIT_SQL_LENGTH = 1
-        SQLITE_LIMIT_COLUMN = 2
-        SQLITE_LIMIT_EXPR_DEPTH = 3
-        SQLITE_LIMIT_COMPOUND_SELECT = 4
-        SQLITE_LIMIT_VDBE_OP = 5
-        SQLITE_LIMIT_FUNCTION_ARG = 6
-        SQLITE_LIMIT_ATTACHED = 7
-        SQLITE_LIMIT_LIKE_PATTERN_LENGTH = 8
-        SQLITE_LIMIT_VARIABLE_NUMBER = 9
-        SQLITE_LIMIT_TRIGGER_DEPTH = 10
-        SQLITE_LIMIT_WORKER_THREADS = 11
-        
-        # Default limits for SQLite (can be queried with PRAGMA)
-        limits = {
-            SQLITE_LIMIT_LENGTH: 1000000000,
-            SQLITE_LIMIT_SQL_LENGTH: 1000000000,
-            SQLITE_LIMIT_COLUMN: 2000,
-            SQLITE_LIMIT_EXPR_DEPTH: 1000,
-            SQLITE_LIMIT_COMPOUND_SELECT: 500,
-            SQLITE_LIMIT_VDBE_OP: 250000000,
-            SQLITE_LIMIT_FUNCTION_ARG: 127,
-            SQLITE_LIMIT_ATTACHED: 10,
-            SQLITE_LIMIT_LIKE_PATTERN_LENGTH: 50000,
-            SQLITE_LIMIT_VARIABLE_NUMBER: 32766,
-            SQLITE_LIMIT_TRIGGER_DEPTH: 1000,
-            SQLITE_LIMIT_WORKER_THREADS: 0,
-        }
-        return limits.get(category, -1)
+def _getlimit(self, category):
+    """Get SQLite limit for the given category"""
+    # SQLite limit categories
+    SQLITE_LIMIT_LENGTH = 0
+    SQLITE_LIMIT_SQL_LENGTH = 1
+    SQLITE_LIMIT_COLUMN = 2
+    SQLITE_LIMIT_EXPR_DEPTH = 3
+    SQLITE_LIMIT_COMPOUND_SELECT = 4
+    SQLITE_LIMIT_VDBE_OP = 5
+    SQLITE_LIMIT_FUNCTION_ARG = 6
+    SQLITE_LIMIT_ATTACHED = 7
+    SQLITE_LIMIT_LIKE_PATTERN_LENGTH = 8
+    SQLITE_LIMIT_VARIABLE_NUMBER = 9
+    SQLITE_LIMIT_TRIGGER_DEPTH = 10
+    SQLITE_LIMIT_WORKER_THREADS = 11
     
-    sqlite3.Connection.getlimit = _getlimit
+    # Default limits for SQLite (can be queried with PRAGMA)
+    limits = {
+        SQLITE_LIMIT_LENGTH: 1000000000,
+        SQLITE_LIMIT_SQL_LENGTH: 1000000000,
+        SQLITE_LIMIT_COLUMN: 2000,
+        SQLITE_LIMIT_EXPR_DEPTH: 1000,
+        SQLITE_LIMIT_COMPOUND_SELECT: 500,
+        SQLITE_LIMIT_VDBE_OP: 250000000,
+        SQLITE_LIMIT_FUNCTION_ARG: 127,
+        SQLITE_LIMIT_ATTACHED: 10,
+        SQLITE_LIMIT_LIKE_PATTERN_LENGTH: 50000,
+        SQLITE_LIMIT_VARIABLE_NUMBER: 32766,
+        SQLITE_LIMIT_TRIGGER_DEPTH: 1000,
+        SQLITE_LIMIT_WORKER_THREADS: 0,
+    }
+    return limits.get(category, -1)
+
+# Apply the patch to both sqlite3 and pysqlite3 (if available)
+# Some systems use pysqlite3 which also needs the patch
+def _patch_sqlite_module(module):
+    """Patch a SQLite module's Connection class with getlimit method"""
+    if hasattr(module, 'Connection') and not hasattr(module.Connection, 'getlimit'):
+        try:
+            # Try direct assignment first
+            module.Connection.getlimit = _getlimit
+        except TypeError:
+            # If the Connection type is immutable, use a wrapper class
+            _OriginalConnection = module.Connection
+            
+            class ConnectionWrapper(_OriginalConnection):
+                def getlimit(self, category):
+                    return _getlimit(self, category)
+            
+            # Replace the Connection class in the module
+            module.Connection = ConnectionWrapper
+
+# Patch standard sqlite3
+try:
+    import sqlite3
+    _patch_sqlite_module(sqlite3)
+except ImportError:
+    pass
+
+# Patch pysqlite3 if it's installed
+try:
+    from pysqlite3 import dbapi2 as pysqlite3
+    _patch_sqlite_module(pysqlite3)
+except ImportError:
+    pass
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
